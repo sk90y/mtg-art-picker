@@ -183,13 +183,18 @@ You can close the app anytime and **Continue Project** later – everything is r
 
 ---
 
-# 🛠 Run From Source (Optional — For Developers)
+# 🛠 Run From Source (Mac / Linux / Developers)
+
+If you’re on **Mac or Linux**, or you just want to run the Python script directly:
 
 Requirements:
 
 - Python 3.10+
 - PySide6
 - requests
+
+```bash
+   pip install PySide6 requests
 
 Run:
 
