@@ -34,7 +34,7 @@ jobs:
 
       - name: Package ZIP
         run: |
-          powershell Compress-Archive -Path "dist\MTG Art Picker" -DestinationPath "MTG_Art_Picker_Windows.zip"
+          powershell Compress-Archive -Path "dist\MTG Art Picker\*" -DestinationPath "MTG_Art_Picker_Windows.zip"
           powershell Compress-Archive -Path "CLICK THIS TO RUN.bat" -Update -DestinationPath "MTG_Art_Picker_Windows.zip"
 
       - name: Upload Artifact
