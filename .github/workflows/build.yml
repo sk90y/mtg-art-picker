@@ -1,9 +1,13 @@
 name: Build Windows EXE
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -23,9 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests PySide6 shiboken6 pyinstaller
 
-      # Builds the EXE from the "latest" script in the repo: mtg_art_picker.py
-      - name: Build EXE
-        shell: pwsh
+      - name: Build EXE (PyInstaller)
         run: |
           pyinstaller --noconfirm --clean `
             --name "MTG Art Picker" `
@@ -33,22 +35,36 @@ jobs:
             --collect-all PySide6 `
             mtg_art_picker.py
 
-      - name: Create Launcher
-        shell: pwsh
+      - name: Create launcher BAT
         run: |
-          '@echo off' | Out-File -Encoding ASCII "CLICK THIS TO RUN.bat"
-          'cd /d "%~dp0"' | Out-File -Encoding ASCII -Append "CLICK THIS TO RUN.bat"
-          'start "" "%~dp0MTG Art Picker\MTG Art Picker.exe"' | Out-File -Encoding ASCII -Append "CLICK THIS TO RUN.bat"
+          $bat = @"
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+          start "" "%~dp0MTG Art Picker\MTG Art Picker.exe"
+          "@
+          $bat | Out-File -Encoding ASCII "CLICK THIS TO RUN.bat"
 
-      - name: Package ZIP
-        shell: pwsh
+      - name: Create release ZIP (no nesting)
         run: |
-          if (!(Test-Path "dist\MTG Art Picker")) { throw "Build output not found: dist\MTG Art Picker" }
-          Compress-Archive -Path "dist\MTG Art Picker\*" -DestinationPath "MTG_Art_Picker_Windows.zip" -Force
-          Compress-Archive -Path "CLICK THIS TO RUN.bat" -DestinationPath "MTG_Art_Picker_Windows.zip" -Update
+          New-Item -ItemType Directory -Force -Path "release" | Out-Null
+          Copy-Item -Recurse -Force "dist\MTG Art Picker" "release\MTG Art Picker"
+          Copy-Item -Force "CLICK THIS TO RUN.bat" "release\CLICK THIS TO RUN.bat"
+          if (Test-Path "MTG_Art_Picker_Windows.zip") { Remove-Item "MTG_Art_Picker_Windows.zip" -Force }
+          Compress-Archive -Path "release\*" -DestinationPath "MTG_Art_Picker_Windows.zip"
 
+      # Optional: keeps a downloadable artifact on the Actions run page (will be wrapped by GitHub)
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: MTG_Art_Picker_Windows
           path: MTG_Art_Picker_Windows.zip
+
+      # This is the key part: attach the zip to the GitHub Release automatically
+      - name: Publish Release (attach ZIP)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MTG_Art_Picker_Windows.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
