@@ -1,28 +1,46 @@
-# MTG Art Picker
+# MTG Art Picker — Magic: The Gathering Art Downloader (No Python Needed)
 
-**MTG / Magic: The Gathering Art Picker & Image Downloader — Click-and-use PySide6 desktop GUI powered by the Scryfall API to load decklists, browse and compare printings, apply filters, choose preferred artwork, and batch-download/export selected card images.**
+MTG Art Picker is a simple desktop tool for **Magic: The Gathering players** to browse, compare, and download card artwork using the Scryfall API.
+
+Perfect for:
+
+- Proxy printing
+- Deck customization
+- Collectors choosing favorite artwork
+- Cube design
+- MTG enthusiasts
+
+Built with PySide6 and powered by Scryfall.
 
 ---
 
-## 🚀 Download (For Most Users — No Python Needed)
+# 🚀 DOWNLOAD (MOST USERS — NO PYTHON REQUIRED)
 
-Go to the **Releases** section on the right side of this page and download:
+## 👉 IMPORTANT: GO TO **RELEASES** AND DOWNLOAD THE ZIP FILE
 
-MTG_Art_Picker_Windows.zip
+Click here:
 
-Steps:
+👉 [https://github.com/YOURNAME/mtg-art-picker/releases](https://github.com/sk90y/mtg-art-picker/releases)
 
-1. Download the ZIP
-2. Right-click → Extract All
-3. Double-click **CLICK THIS TO RUN.bat**
+Then:
 
-If Windows shows “Protected your PC”:
+1. Download **MTG_Art_Picker_Windows.zip**
+2. Right-click → **Extract All**
+3. Open the folder
+4. Double-click **CLICK_THIS_TO_RUN.bat**
+
+✅ No installation required  
+✅ Works on Windows 10 / 11  
+✅ Python NOT needed  
+
+If Windows shows **“Protected your PC”**:
+
 - Click **More info**
 - Click **Run anyway**
 
 ---
 
-## 🧠 What This Tool Does
+# ✨ What This Tool Does
 
 This tool helps Magic players:
 
@@ -31,18 +49,28 @@ This tool helps Magic players:
 - Compare artwork visually
 - Filter styles and versions
 - Select preferred art
-- Export/download chosen images
-
-Perfect for:
-
-- Proxy printing
-- Deck customization
-- Cube design
-- Collectors choosing favorite art
+- Batch download/export card images
 
 ---
 
-## 🐍 Run From Source (For Python Users)
+# 🧙 Who This Tool Is For
+
+Magic: The Gathering players who want:
+
+- High-quality proxy images
+- Easy art comparison
+- Fast bulk downloads
+- A simple desktop app without coding
+
+---
+
+# 🖥 Screenshots
+
+(Add screenshots here — this improves SEO a lot)
+
+---
+
+# 🛠 Run From Source (Optional — For Developers)
 
 Requirements:
 
@@ -52,16 +80,14 @@ Requirements:
 
 Run:
 
-```bash
 python mtg_art_picker.py
-```
 
 ---
 
-## ⚠️ Disclaimer
+# ⚠ Disclaimer
 
 This project is unofficial and not affiliated with Wizards of the Coast.
 
-All card data and images are provided by the Scryfall API.
+All card data and images are provided by the Scryfall API:
 
 https://scryfall.com/docs/api
