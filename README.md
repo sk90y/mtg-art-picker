@@ -1,6 +1,5 @@
 # MTG Art Picker — Magic: The Gathering Art Downloader (No Python Needed)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Release](https://img.shields.io/github/v/release/sk90y/mtg-art-picker)](https://github.com/sk90y/mtg-art-picker/releases)
 [![Downloads](https://img.shields.io/github/downloads/sk90y/mtg-art-picker/total)](https://github.com/sk90y/mtg-art-picker/releases)
