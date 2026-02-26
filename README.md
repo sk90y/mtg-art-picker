@@ -1,10 +1,15 @@
-# MTG Art Picker — Magic: The Gathering Art Downloader (No Python Needed)
+# MTG Art Picker — Magic: The Gathering Art Downloader
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Release](https://img.shields.io/github/v/release/sk90y/mtg-art-picker)](https://github.com/sk90y/mtg-art-picker/releases)
 [![Downloads](https://img.shields.io/github/downloads/sk90y/mtg-art-picker/total)](https://github.com/sk90y/mtg-art-picker/releases)
 
-MTG Art Picker is a simple desktop tool for **Magic: The Gathering players** to browse, compare, and download card artwork using the Scryfall API.
+# MTG Art Picker — Magic: The Gathering Art Downloader (No Python Needed)
+
+MTG Art Picker is a fast desktop tool for Magic: The Gathering players to browse, compare, and download card artwork using the **Scryfall API**.  
+Perfect for proxy printing, deck customization, cube design, or just collecting your favorite art.
+
+Built with PySide6 and powered by Scryfall.
 
 ## Features
 - 🖼️ Browse **every printing** of any Magic card
@@ -23,6 +28,18 @@ Perfect for:
 - MTG enthusiasts
 
 Built with PySide6 and powered by Scryfall.
+
+---
+
+## 🤔 Why I Built This
+
+All the existing tools (Moxfield, MPCFill.com, etc.) were **clunky and slow** – too many mouse clicks to select one image.  
+I wanted a tool that lets you fly through a decklist with just the keyboard.  
+(MPCFill has higher‑quality pictures, but it takes forever to finish a full deck.)
+
+So I made MTG Art Picker: **fast navigation, minimal clicks, all in one place.**
+
+*I’m not committed to long‑term support, but I’ll tinker with it as time allows. If you’d like to help out or suggest improvements, feel free to contact me!*
 
 ---
 
@@ -193,3 +210,14 @@ This tool is a **hobbyist project** created for **personal, non-commercial use o
 - Distribute downloaded images in a way that infringes on Wizards of the Coast’s or artists’ rights
 
 All card data and images are provided by the [Scryfall API](https://scryfall.com/docs/api). This project is **unofficial** and **not affiliated with Wizards of the Coast** or Scryfall in any way. The artwork belongs to its respective copyright holders. By using this tool, you agree to respect intellectual property rights and use the downloaded images solely for personal, non‑commercial purposes.
+
+---
+
+🤝 Contributing / Contact
+
+I’m not committed to long‑term support, but I’ll tinker with this project as time allows.
+If you’d like to help out, report a bug, or suggest a feature, feel free to:
+
+Open a GitHub Issue
+
+Pull requests are welcome – let’s make this tool even better together!
