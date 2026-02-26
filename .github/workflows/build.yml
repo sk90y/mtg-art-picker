@@ -1,10 +1,11 @@
 name: Build Windows EXE
 
 on:
-  workflow_dispatch:
   push:
+    branches: [ main ]
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -25,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests PySide6 shiboken6 pyinstaller
+          python -m pip install requests PySide6 shiboken6 pyinstaller
 
       - name: Build EXE (PyInstaller)
         run: |
@@ -35,36 +36,39 @@ jobs:
             --collect-all PySide6 `
             mtg_art_picker.py
 
-      - name: Create launcher BAT
+      - name: Prepare release folder + launcher
+        shell: pwsh
         run: |
-          $bat = @"
-          @echo off
-          setlocal
-          cd /d "%~dp0"
-          start "" "%~dp0MTG Art Picker\MTG Art Picker.exe"
-          "@
-          $bat | Out-File -Encoding ASCII "CLICK THIS TO RUN.bat"
+          New-Item -ItemType Directory -Force -Path release | Out-Null
 
-      - name: Create release ZIP (no nesting)
-        run: |
-          New-Item -ItemType Directory -Force -Path "release" | Out-Null
+          # Copy the built app folder into a clean staging folder
           Copy-Item -Recurse -Force "dist\MTG Art Picker" "release\MTG Art Picker"
-          Copy-Item -Force "CLICK THIS TO RUN.bat" "release\CLICK THIS TO RUN.bat"
+
+          # Create launcher BAT at the ZIP root
+          $bat = @'
+@echo off
+setlocal
+cd /d "%~dp0"
+start "" "%~dp0MTG Art Picker\MTG Art Picker.exe"
+'@
+          Set-Content -Encoding ASCII -Path "release\CLICK THIS TO RUN.bat" -Value $bat
+
+      - name: Create ZIP
+        shell: pwsh
+        run: |
           if (Test-Path "MTG_Art_Picker_Windows.zip") { Remove-Item "MTG_Art_Picker_Windows.zip" -Force }
           Compress-Archive -Path "release\*" -DestinationPath "MTG_Art_Picker_Windows.zip"
 
-      # Optional: keeps a downloadable artifact on the Actions run page (will be wrapped by GitHub)
-      - name: Upload Artifact
+      - name: Upload Artifact (Actions tab)
         uses: actions/upload-artifact@v4
         with:
           name: MTG_Art_Picker_Windows
           path: MTG_Art_Picker_Windows.zip
 
-      # This is the key part: attach the zip to the GitHub Release automatically
-      - name: Publish Release (attach ZIP)
+      # If the push was a tag like v1.0.1, attach ZIP to a GitHub Release automatically
+      - name: Publish Release (only on tags)
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: MTG_Art_Picker_Windows.zip
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
