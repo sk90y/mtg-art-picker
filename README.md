@@ -66,7 +66,11 @@ Magic: The Gathering players who want:
 
 # 🖥 Screenshots
 
-(Add screenshots here — this improves SEO a lot)
+<img width="1084" height="887" alt="Screenshot 2026-02-26 184841" src="https://github.com/user-attachments/assets/e99efd18-b118-4e06-a27d-e267161dd251" />
+<img width="2298" height="1277" alt="Screenshot 2026-02-26 184855" src="https://github.com/user-attachments/assets/d33cea18-d3a0-4c60-8ea5-8e96a58d9f49" />
+<img width="2298" height="1277" alt="Screenshot 2026-02-26 184915" src="https://github.com/user-attachments/assets/14e1989e-7b79-4e81-b803-5497cc6c0452" />
+<img width="304" height="197" alt="Screenshot 2026-02-26 184945" src="https://github.com/user-attachments/assets/78227d1e-2f06-4c77-ba80-594ed978d1c5" />
+<img width="1142" height="670" alt="Screenshot 2026-02-26 185118" src="https://github.com/user-attachments/assets/a4779367-c0fb-4c25-9e4a-461e42bc1e2b" />
 
 ---
 
