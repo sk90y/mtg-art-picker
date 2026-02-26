@@ -37,8 +37,6 @@ I wanted a tool that lets you fly through a decklist with just the keyboard.
 
 So I made MTG Art Picker: **fast navigation, minimal clicks, all in one place.**
 
-*I’m not committed to long‑term support, but I’ll tinker with it as time allows. If you’d like to help out or suggest improvements, feel free to contact me!*
-
 ---
 
 # 🚀 DOWNLOAD (MOST USERS — NO PYTHON REQUIRED)
