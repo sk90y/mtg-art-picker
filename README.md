@@ -199,7 +199,9 @@ Requirements:
 
 Run:
 
+```bash
 python mtg_art_picker.py
+```
 
 ---
 
