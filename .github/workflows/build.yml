@@ -16,26 +16,36 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install requests PySide6 shiboken6 pyinstaller
 
+      # Builds the EXE from the "latest" script in the repo: mtg_art_picker.py
       - name: Build EXE
-        run: pyinstaller --noconfirm --clean --name "MTG Art Picker" --onedir --windowed --collect-all PySide6 mtg_art_picker.py
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean `
+            --name "MTG Art Picker" `
+            --onedir --windowed `
+            --collect-all PySide6 `
+            mtg_art_picker.py
 
       - name: Create Launcher
+        shell: pwsh
         run: |
-          echo @echo off > "CLICK THIS TO RUN.bat"
-          echo cd /d "%%~dp0" >> "CLICK THIS TO RUN.bat"
-          echo start "" "%%~dp0MTG Art Picker\MTG Art Picker.exe" >> "CLICK THIS TO RUN.bat"
+          '@echo off' | Out-File -Encoding ASCII "CLICK THIS TO RUN.bat"
+          'cd /d "%~dp0"' | Out-File -Encoding ASCII -Append "CLICK THIS TO RUN.bat"
+          'start "" "%~dp0MTG Art Picker\MTG Art Picker.exe"' | Out-File -Encoding ASCII -Append "CLICK THIS TO RUN.bat"
 
       - name: Package ZIP
+        shell: pwsh
         run: |
-          powershell Compress-Archive -Path "dist\MTG Art Picker\*" -DestinationPath "MTG_Art_Picker_Windows.zip"
-          powershell Compress-Archive -Path "CLICK THIS TO RUN.bat" -Update -DestinationPath "MTG_Art_Picker_Windows.zip"
+          if (!(Test-Path "dist\MTG Art Picker")) { throw "Build output not found: dist\MTG Art Picker" }
+          Compress-Archive -Path "dist\MTG Art Picker\*" -DestinationPath "MTG_Art_Picker_Windows.zip" -Force
+          Compress-Archive -Path "CLICK THIS TO RUN.bat" -DestinationPath "MTG_Art_Picker_Windows.zip" -Update
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
