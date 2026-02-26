@@ -211,7 +211,7 @@ All card data and images are provided by the [Scryfall API](https://scryfall.com
 
 ---
 
-🤝 Contributing / Contact
+## 🤝 Contributing / Contact
 
 I’m not committed to long‑term support, but I’ll tinker with this project as time allows.
 If you’d like to help out, report a bug, or suggest a feature, feel free to:
