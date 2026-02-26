@@ -53,7 +53,7 @@ Requirements:
 Run:
 
 ```bash
-python mtgpicturedownloadscript4.0.py
+python mtg_art_picker.py
 ```
 
 ---
