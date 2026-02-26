@@ -74,6 +74,43 @@ Magic: The Gathering players who want:
 
 ---
 
+# User Guide for MTG Art Picker
+
+## Overview
+Welcome to the MTG Art Picker application! This guide will help you understand how to use the application effectively, including information on filters, keyboard shortcuts, and general usage.
+
+## Filters
+The MTG Art Picker offers various filters to help you narrow down your search for specific Magic: The Gathering artwork. You can use the following filters:
+
+1. **Set Filter**: Narrow your selection by the specific set the cards belong to.
+2. **Rarity Filter**: Choose between common, uncommon, rare, and mythic rare cards.
+3. **Color Filter**: Filter the cards based on their color (e.g., Red, Blue, Green, etc.).
+4. **Card Type Filter**: Limit your search to specific types of cards (e.g., creature, sorcery, instant).
+
+To apply a filter, simply select your desired options from the filter menu and click on the **Apply Filters** button. You can reset all filters by clicking the **Reset Filters** button.
+
+## Keyboard Shortcuts
+To enhance your experience while using MTG Art Picker, you can use the following keyboard shortcuts:
+
+- **Ctrl + F**: Open filter panel.
+- **Ctrl + S**: Save your current selections.
+- **Esc**: Close the filter panel or any pop-up.
+- **Arrow Keys**: Navigate through the card list.
+
+## How to Use the Application
+Using the MTG Art Picker is simple and intuitive. Follow these steps to get started:
+
+1. **Launch the Application**: Open the MTG Art Picker in your preferred web browser.
+2. **Select Filters**: Use the filtering options available to refine your card search.
+3. **Browse Cards**: Scroll through the displayed artwork based on your selected filters.
+4. **Select Cards**: Click on any card to view more details.
+5. **Save or Share**: Use the save option to keep your selections for later or share them with friends.
+
+## Conclusion
+We hope this user guide will assist you in utilizing the MTG Art Picker effectively. If you have any further questions or need assistance, please contact our support team.
+
+---
+
 # 🛠 Run From Source (Optional — For Developers)
 
 Requirements:
