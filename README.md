@@ -1,6 +1,19 @@
 # MTG Art Picker — Magic: The Gathering Art Downloader (No Python Needed)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Release](https://img.shields.io/github/v/release/sk90y/mtg-art-picker)](https://github.com/sk90y/mtg-art-picker/releases)
+[![Downloads](https://img.shields.io/github/downloads/sk90y/mtg-art-picker/total)](https://github.com/sk90y/mtg-art-picker/releases)
+
 MTG Art Picker is a simple desktop tool for **Magic: The Gathering players** to browse, compare, and download card artwork using the Scryfall API.
+
+## Features
+- 🖼️ Browse **every printing** of any Magic card
+- 🔍 Filter by border, frame, art style, and more
+- ⌨️ Full keyboard navigation for fast selection
+- 💾 Local cache – works offline after first load
+- 📥 Batch download selected images (PNG/JPG)
+- ↔️ Compare all versions side‑by‑side
 
 Perfect for:
 
