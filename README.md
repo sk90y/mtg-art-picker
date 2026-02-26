@@ -194,7 +194,8 @@ Requirements:
 - requests
 
 ```bash
-   pip install PySide6 requests```
+   pip install PySide6 requests
+```
 
 Run:
 
