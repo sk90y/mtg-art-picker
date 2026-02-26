@@ -106,6 +106,7 @@ Filters apply to **every card** in your deck (except when using **0** – see be
 - **Stamp** – The holofoil stamp type: `oval`, `acorn`, `triangle`, `arena`.  
 
 **Tip:** Start with loose filters, then tighten as needed. If no printings appear, try clearing some filters.
+**More Infromation about cryfall’s syntax at: https://scryfall.com/docs/syntax**
 
 ### 4. Keyboard Shortcuts (Master These!)
 
