@@ -24,12 +24,7 @@ jobs:
           pip install requests PySide6 shiboken6 pyinstaller
 
       - name: Build EXE
-        run: |
-          pyinstaller --noconfirm --clean ^
-            --name "MTG Art Picker" ^
-            --onedir --windowed ^
-            --collect-all PySide6 ^
-            mtgpicturedownloadscript4.0.py
+        run: pyinstaller --noconfirm --clean --name "MTG Art Picker" --onedir --windowed --collect-all PySide6 mtg_art_picker.py
 
       - name: Create Launcher
         run: |
