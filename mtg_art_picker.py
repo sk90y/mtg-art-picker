@@ -46,6 +46,10 @@ _meta_executor = ThreadPoolExecutor(max_workers=META_WORKERS, thread_name_prefix
 PRELOAD_WORKERS = 2
 _preload_executor = ThreadPoolExecutor(max_workers=PRELOAD_WORKERS, thread_name_prefix="preload")
 
+# Download pool (kept separate from preload so long downloads do not starve preloading)
+DOWNLOAD_WORKERS = 1
+_download_executor = ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS, thread_name_prefix="download")
+
 # Lazy thumb loading tuning (important for ALL PRINTS)
 THUMB_LOAD_BUFFER = 10          # thumbs beyond viewport to prefetch
 PRELOAD_NEXT_THUMBS = 30        # next-card thumb prefetch
@@ -635,7 +639,7 @@ class NewProjectDialog(QDialog):
 
 
 class FilterSetupDialog(QDialog):
-    def __init__(self, filters: Dict[str, Any], ui_language: str = "en", parent=None):
+    def __init__(self, filters: Dict[str, Any], ui_language: str = "en", allow_skip: bool = False, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Project Settings")
         self.setModal(True)
@@ -644,6 +648,7 @@ class FilterSetupDialog(QDialog):
         self.filters = dict(DEFAULT_FILTERS)
         self.filters.update(filters or {})
         self.ui_language = ui_language if ui_language in ("en", "zh") else "en"
+        self.use_current = False
 
         layout = QVBoxLayout(self)
 
@@ -681,16 +686,37 @@ class FilterSetupDialog(QDialog):
         form.addRow("", self.cb_hires)
         layout.addWidget(filt_box)
 
+        advanced_hint = QLabel("Advanced filters (frame effect/default/atypical/stamp/UB) can be changed later in the main window.")
+        advanced_hint.setWordWrap(True)
+        advanced_hint.setStyleSheet("color:#666;")
+        layout.addWidget(advanced_hint)
+
         btns = QHBoxLayout()
         ok = QPushButton("Continue")
         cancel = QPushButton("Cancel")
         btns.addStretch(1)
         btns.addWidget(cancel)
+        if allow_skip:
+            use_current = QPushButton("Use Current")
+            use_current.clicked.connect(self.on_use_current)
+            btns.addWidget(use_current)
         btns.addWidget(ok)
         layout.addLayout(btns)
 
         cancel.clicked.connect(self.reject)
         ok.clicked.connect(self.on_ok)
+        self.dd_border.currentTextChanged.connect(self._update_borderless_enabled)
+        self._update_borderless_enabled()
+
+    def _update_borderless_enabled(self):
+        enabled = self.dd_border.currentText().lower() == "any"
+        self.cb_prefer_borderless.setEnabled(enabled)
+        if not enabled:
+            self.cb_prefer_borderless.setChecked(False)
+
+    def on_use_current(self):
+        self.use_current = True
+        self.accept()
 
     def on_ok(self):
         self.ui_language = "zh" if self.dd_lang.currentIndex() == 1 else "en"
@@ -960,7 +986,7 @@ class MainWindow(QMainWindow):
         st = (f.get("stamp") or "any").lower()
         self.dd_stamp.setCurrentText("Any" if st == "any" else st)
 
-        self.cb_prefer_borderless.setChecked(bool(f.get("prefer_borderless", True)))
+        self.cb_prefer_borderless.setChecked(bool(f.get("prefer_borderless", False)))
         self.cb_full.setChecked(bool(f.get("is_full", False)))
         self.cb_hires.setChecked(bool(f.get("is_hires", False)))
         self.cb_default.setChecked(bool(f.get("is_default", False)))
@@ -1066,7 +1092,8 @@ class MainWindow(QMainWindow):
 
     def format_card_row(self, card: str) -> str:
         qty = int(self.project.card_qty.get(card, 1))
-        qty_txt = f" x{qty}" if qty > 1 else ""
+        has_copy_suffix = bool(re.search(r"\[\d+/\d+\]$", card))
+        qty_txt = f" x{qty}" if qty > 1 and not has_copy_suffix else ""
         sel = self.project.selections.get(card)
         if sel:
             return f"✅ {card}{qty_txt} [{sel.get('set','')} {sel.get('collector','')}]"
@@ -1523,6 +1550,7 @@ class MainWindow(QMainWindow):
 
         if card in self._all_prints_override:
             self._all_prints_override.remove(card)
+            self._auto_relaxed_cards.discard(card)
         else:
             self._all_prints_override.add(card)
 
@@ -1696,6 +1724,7 @@ class MainWindow(QMainWindow):
                 return
 
         out_dir = self.project.folder / "DOWNLOADED IMAGES HERE"
+        logging.info(f"Download destination: {out_dir}")
 
         items = list(self.project.selections.items())
         if not items:
@@ -1707,7 +1736,7 @@ class MainWindow(QMainWindow):
         self.btn_download.setEnabled(False)
         self._download_cancel.clear()
 
-        prog = QProgressDialog("Downloading selected cards…", "Cancel", 0, len(items), self)
+        prog = QProgressDialog(f"Downloading selected cards to:\n{out_dir}", "Cancel", 0, len(items), self)
         prog.setWindowModality(Qt.WindowModal)
         prog.canceled.connect(lambda: self._download_cancel.set())
         prog.show()
@@ -1747,11 +1776,11 @@ class MainWindow(QMainWindow):
 
                     self.dl_signals.progress.emit(i)
 
-                self.dl_signals.done.emit("Download finished.")
+                self.dl_signals.done.emit(f"Download finished. Files saved to:\n{outp}")
             except Exception as e:
                 self.dl_signals.error.emit(str(e))
 
-        _preload_executor.submit(worker)  # bounded worker, avoids extra threads
+        _download_executor.submit(worker)
 
     def on_download_progress(self, value: int):
         if self._progress_dialog:
@@ -1851,11 +1880,12 @@ def main():
     else:
         return
 
-    pre = FilterSetupDialog(pr.filters, pr.ui_language)
+    pre = FilterSetupDialog(pr.filters, pr.ui_language, allow_skip=(mode in ("continue", "browse")))
     if pre.exec() != QDialog.Accepted:
         return
-    pr.filters = pre.filters
-    pr.ui_language = pre.ui_language
+    if not pre.use_current:
+        pr.filters = pre.filters
+        pr.ui_language = pre.ui_language
     pr.save()
 
     update_recent_projects(settings, str(pr.folder))
@@ -1870,7 +1900,7 @@ def main():
         app.exec()
     finally:
         # bounded pools shutdown
-        for ex in (_image_executor, _meta_executor, _preload_executor):
+        for ex in (_image_executor, _meta_executor, _preload_executor, _download_executor):
             try:
                 ex.shutdown(wait=False, cancel_futures=False)
             except Exception:
