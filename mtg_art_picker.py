@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "2.0.1"
 
 import json
 import re
@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QListWidget, QListWidgetItem, QSplitter,
     QFileDialog, QDialog, QLineEdit, QTextEdit, QMessageBox,
     QScrollArea, QFrame, QProgressDialog, QInputDialog,
-    QCheckBox, QComboBox
+    QCheckBox, QComboBox, QFormLayout, QGroupBox
 )
 
 # ---------------------------- Config ----------------------------
@@ -45,6 +45,10 @@ _meta_executor = ThreadPoolExecutor(max_workers=META_WORKERS, thread_name_prefix
 # Preload pool (bounded) – prevents “one new thread per navigation”
 PRELOAD_WORKERS = 2
 _preload_executor = ThreadPoolExecutor(max_workers=PRELOAD_WORKERS, thread_name_prefix="preload")
+
+# Download pool (kept separate from preload so long downloads do not starve preloading)
+DOWNLOAD_WORKERS = 1
+_download_executor = ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS, thread_name_prefix="download")
 
 # Lazy thumb loading tuning (important for ALL PRINTS)
 THUMB_LOAD_BUFFER = 10          # thumbs beyond viewport to prefetch
@@ -93,6 +97,7 @@ def setup_project_logging(project_folder: Path) -> Path:
     root.addHandler(ch)
 
     logging.info("========== MTG ART PICKER START ==========")
+    logging.info(f"Version: {__version__}")
     logging.info(f"Project folder: {project_folder}")
     logging.info(f"Log file: {log_path}")
 
@@ -158,25 +163,34 @@ def cache_key(card: str) -> str:
     h = hashlib.sha256(card.encode("utf-8")).hexdigest()[:10]
     return f"{safe}_{h}"
 
-def parse_decklist_text(text: str) -> List[str]:
-    names: List[str] = []
-    seen = set()
-    qty_re = re.compile(r"^\s*(\d+)\s*x?\s+(.+?)\s*$", re.IGNORECASE)
+def tr(language: str, en: str, zh: str) -> str:
+    return zh if language == "zh" else en
 
+def parse_deck_quantities(text: str) -> List[Tuple[int, str]]:
+    out: List[Tuple[int, str]] = []
+    qty_re = re.compile(r"^\s*(\d+)\s*x?\s+(.+?)\s*$", re.IGNORECASE)
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or line.startswith("//"):
             continue
-
         m = qty_re.match(line)
-        name = m.group(2).strip() if m else line
+        qty = int(m.group(1)) if m else 1
+        name = (m.group(2) if m else line).strip()
         name = re.sub(r"\s*\([A-Z0-9]{2,6}\)\s*$", "", name).strip()
+        if name:
+            out.append((max(1, qty), name))
+    return out
 
-        if name and name not in seen:
-            seen.add(name)
-            names.append(name)
-
-    return names
+def parse_token_queries(text: str) -> List[str]:
+    tokens: List[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("//"):
+            continue
+        if "type:token" not in line.lower():
+            line = f"type:token {line}"
+        tokens.append(line)
+    return tokens
 
 def http_get_bytes(url: str, timeout: int = 30) -> bytes:
     r = get_session().get(url, timeout=timeout)
@@ -190,7 +204,7 @@ def filters_signature(filters: Dict[str, Any]) -> str:
 # ---------------------------- Filters / Query Building ----------------------------
 
 DEFAULT_FILTERS: Dict[str, Any] = {
-    "prefer_borderless": True,
+    "prefer_borderless": False,
     "border": "any",
     "frame_edition": "any",
     "frame_effect": "any",
@@ -299,8 +313,8 @@ def fetch_all_printings_with_query(q: str) -> List[Printing]:
 
     return out
 
-def fetch_all_printings(card_name: str, filters: Dict[str, Any]) -> List[Printing]:
-    base = f'!"{card_name}"'
+def fetch_all_printings(card_name: str, filters: Dict[str, Any], exact_name: bool = True) -> List[Printing]:
+    base = f'!"{card_name}"' if exact_name else card_name
     if not filters:
         return fetch_all_printings_with_query(base)
 
@@ -326,8 +340,8 @@ class ImageLoaded(QObject):
     error = Signal(str, str)
 
 class MetaLoaded(QObject):
-    meta_ready = Signal(str, list, str)   # card, prints, sig
-    error = Signal(str, str, str)         # card, msg, sig
+    meta_ready = Signal(str, list, str, bool)   # card, prints, sig, auto_relaxed
+    error = Signal(str, str, str)               # card, msg, sig
 
 class DownloadSignals(QObject):
     progress = Signal(int)
@@ -356,6 +370,9 @@ class Project:
         self.active_printing_index: Dict[str, int] = {}
         self.selections: Dict[str, Dict[str, Any]] = {}
         self.filters: Dict[str, Any] = dict(DEFAULT_FILTERS)
+        self.card_query: Dict[str, str] = {}
+        self.card_qty: Dict[str, int] = {}
+        self.ui_language: str = "en"
 
     def save(self):
         try:
@@ -364,6 +381,9 @@ class Project:
                 "current_index": self.current_index,
                 "active_printing_index": self.active_printing_index,
                 "filters": self.filters,
+                "card_query": self.card_query,
+                "card_qty": self.card_qty,
+                "ui_language": self.ui_language,
             }, ensure_ascii=False, indent=2), encoding="utf-8")
 
             self.selections_path.write_text(
@@ -387,6 +407,13 @@ class Project:
                     self.filters = merged
                 else:
                     self.filters = dict(DEFAULT_FILTERS)
+                self.card_query = obj.get("card_query", {}) or {}
+                self.card_qty = obj.get("card_qty", {}) or {}
+                self.ui_language = str(obj.get("ui_language", "en"))
+                if not self.card_query:
+                    self.card_query = {c: c for c in self.deck}
+                if not self.card_qty:
+                    self.card_qty = {c: 1 for c in self.deck}
 
             if self.selections_path.exists():
                 self.selections = json.loads(self.selections_path.read_text(encoding="utf-8")) or {}
@@ -397,6 +424,9 @@ class Project:
             self.active_printing_index = {}
             self.selections = {}
             self.filters = dict(DEFAULT_FILTERS)
+            self.card_query = {}
+            self.card_qty = {}
+            self.ui_language = "en"
 
     def meta_cache_path(self, card: str, sig: str) -> Path:
         return self.cache_meta / f"{cache_key(card)}__{sig}.json"
@@ -433,29 +463,45 @@ class Project:
 # ---------------------------- UI Dialogs ----------------------------
 
 class StartDialog(QDialog):
-    def __init__(self, parent=None, recent: List[str] = None):
+    def __init__(self, parent=None, recent: List[str] = None, ui_language: str = "en"):
         super().__init__(parent)
-        self.setWindowTitle("MTG Art Picker — Start")
+        self.lang = ui_language if ui_language in ("en", "zh") else "en"
+        self.setWindowTitle(tr(self.lang, f"MTG Art Picker v{__version__} — Start", f"万智牌选图器 v{__version__} — 开始"))
         self.setModal(True)
         self.resize(520, 320)
 
         self.choice: Optional[Tuple[str, Optional[str]]] = None
+        self.ui_language: str = self.lang
 
         layout = QVBoxLayout(self)
-        title = QLabel("Choose an option:")
-        title.setFont(QFont("Arial", 12, QFont.Bold))
-        layout.addWidget(title)
+        self.title = QLabel("")
+        self.title.setFont(QFont("Arial", 12, QFont.Bold))
+        layout.addWidget(self.title)
+
+        lang_row = QHBoxLayout()
+        self.lang_label = QLabel("")
+        self.dd_lang = QComboBox()
+        self.dd_lang.addItems(["English", "中文"])
+        self.dd_lang.setCurrentIndex(1 if self.lang == "zh" else 0)
+        self.lang_hint = QLabel("")
+        self.lang_hint.setStyleSheet("color:#666;")
+        lang_row.addWidget(self.lang_label)
+        lang_row.addWidget(self.dd_lang)
+        lang_row.addStretch(1)
+        layout.addLayout(lang_row)
+        layout.addWidget(self.lang_hint)
 
         row = QHBoxLayout()
-        self.btn_new = QPushButton("New Project")
-        self.btn_continue = QPushButton("Continue Project")
-        self.btn_browse = QPushButton("Browse…")
+        self.btn_new = QPushButton()
+        self.btn_continue = QPushButton()
+        self.btn_browse = QPushButton()
         row.addWidget(self.btn_new)
         row.addWidget(self.btn_continue)
         row.addWidget(self.btn_browse)
         layout.addLayout(row)
 
-        layout.addWidget(QLabel("Recent projects:"))
+        self.recent_label = QLabel("")
+        layout.addWidget(self.recent_label)
         self.recent_list = QListWidget()
         layout.addWidget(self.recent_list)
 
@@ -463,14 +509,33 @@ class StartDialog(QDialog):
             for p in recent[:12]:
                 self.recent_list.addItem(QListWidgetItem(p))
 
-        hint = QLabel("Tip: Project folder stores selections + cache so you can resume anytime.")
-        hint.setStyleSheet("color:#666;")
-        layout.addWidget(hint)
+        self.hint = QLabel("")
+        self.hint.setStyleSheet("color:#666;")
+        layout.addWidget(self.hint)
 
         self.btn_new.clicked.connect(self.on_new)
         self.btn_continue.clicked.connect(self.on_continue)
         self.btn_browse.clicked.connect(self.on_browse)
         self.recent_list.itemDoubleClicked.connect(self.on_recent_double)
+        self.dd_lang.currentIndexChanged.connect(self.on_lang_changed)
+
+        self.refresh_texts()
+
+    def refresh_texts(self):
+        self.setWindowTitle(tr(self.lang, f"MTG Art Picker v{__version__} — Start", f"万智牌选图器 v{__version__} — 开始"))
+        self.title.setText(tr(self.lang, "Choose an option:", "请选择一个选项："))
+        self.lang_label.setText(tr(self.lang, "UI Language:", "界面语言："))
+        self.lang_hint.setText(tr(self.lang, "UI language only (does not change card print/card text language).", "仅影响界面语言（不会改变卡牌印刷或卡图语言）。"))
+        self.btn_new.setText(tr(self.lang, "New Project", "新建项目"))
+        self.btn_continue.setText(tr(self.lang, "Continue Project", "继续项目"))
+        self.btn_browse.setText(tr(self.lang, "Browse…", "浏览…"))
+        self.recent_label.setText(tr(self.lang, "Recent projects:", "最近项目："))
+        self.hint.setText(tr(self.lang, "Tip: Project folder stores selections + cache so you can resume anytime.", "提示：项目文件夹会保存选择结果和缓存，可随时继续。"))
+
+    def on_lang_changed(self, _idx: int):
+        self.lang = "zh" if self.dd_lang.currentIndex() == 1 else "en"
+        self.ui_language = self.lang
+        self.refresh_texts()
 
     def on_new(self):
         self.choice = ("new", None)
@@ -482,62 +547,73 @@ class StartDialog(QDialog):
             self.choice = ("continue", item.text())
             self.accept()
         else:
-            QMessageBox.information(self, "Continue", "Select a recent project or use Browse…")
+            QMessageBox.information(self, tr(self.lang, "Continue", "继续"), tr(self.lang, "Select a recent project or use Browse…", "请选择一个最近项目，或点击“浏览…”。"))
 
     def on_recent_double(self, item: QListWidgetItem):
         self.choice = ("continue", item.text())
         self.accept()
 
     def on_browse(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select project folder")
+        folder = QFileDialog.getExistingDirectory(self, tr(self.lang, "Select project folder", "选择项目文件夹"))
         if folder:
             self.choice = ("browse", folder)
             self.accept()
 
 class NewProjectDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, ui_language: str = "en"):
         super().__init__(parent)
-        self.setWindowTitle("New Project")
+        self.lang = ui_language if ui_language in ("en", "zh") else "en"
+        self.setWindowTitle(tr(self.lang, "New Project", "新建项目"))
         self.setModal(True)
-        self.resize(720, 560)
+        self.resize(760, 650)
 
         self.project_folder: Optional[str] = None
         self.deck_text: str = ""
+        self.token_text: str = ""
+        self.duplicate_mode: str = "same"
 
         layout = QVBoxLayout(self)
 
         row = QHBoxLayout()
         self.folder_edit = QLineEdit()
-        self.folder_edit.setPlaceholderText("Choose a project folder…")
-        btn_folder = QPushButton("Choose Folder…")
-        row.addWidget(QLabel("Project folder:"))
+        self.folder_edit.setPlaceholderText(tr(self.lang, "Choose a project folder…", "选择项目文件夹…"))
+        btn_folder = QPushButton(tr(self.lang, "Choose Folder…", "选择文件夹…"))
+        row.addWidget(QLabel(tr(self.lang, "Project folder:", "项目文件夹：")))
         row.addWidget(self.folder_edit, 1)
         row.addWidget(btn_folder)
         layout.addLayout(row)
 
-        layout.addWidget(QLabel("Decklist (paste) OR import from file:"))
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel(tr(self.lang, "Duplicate cards:", "重复卡牌：")))
+        self.dd_dupes = QComboBox()
+        self.dd_dupes.addItems([
+            tr(self.lang, "Use same selected printing for all copies", "所有张数使用同一印刷版本"),
+            tr(self.lang, "Select each copy separately", "每一张单独选择印刷版本"),
+        ])
+        mode_row.addWidget(self.dd_dupes, 1)
+        layout.addLayout(mode_row)
 
-        token_hint = QLabel(
-            'Token tip (not handled by this tool): on Scryfall you can search tokens like '
-            '"type:token cat pow=2 tou=2" (2/2 Cat token) or "type:token pow=1 tou=1" (generic 1/1).'
-        )
-        token_hint.setWordWrap(True)
-        token_hint.setStyleSheet("color:#666;")
-        layout.addWidget(token_hint)
+        layout.addWidget(QLabel(tr(self.lang, "Decklist (paste) OR import from file:", "牌表（粘贴）或从文件导入：")))
 
         import_row = QHBoxLayout()
-        self.btn_import = QPushButton("Import Decklist File…")
+        self.btn_import = QPushButton(tr(self.lang, "Import Decklist File…", "导入牌表文件…"))
         import_row.addWidget(self.btn_import)
         import_row.addStretch(1)
         layout.addLayout(import_row)
 
         self.text = QTextEdit()
-        self.text.setPlaceholderText("Paste decklist here (one card per line; quantities ok)…")
+        self.text.setPlaceholderText(tr(self.lang, "Paste decklist here (one card per line; quantities ok)…", "在此粘贴牌表（每行一张，支持数量）…"))
         layout.addWidget(self.text, 1)
 
+        layout.addWidget(QLabel(tr(self.lang, "Token queries (optional, one query per line):", "衍生物查询（可选，每行一个查询）：")))
+        self.token_box = QTextEdit()
+        self.token_box.setPlaceholderText(tr(self.lang, "Examples: cat pow=2 tou=2 OR type:token treasure", "示例：cat pow=2 tou=2 或 type:token treasure"))
+        self.token_box.setFixedHeight(120)
+        layout.addWidget(self.token_box)
+
         btns = QHBoxLayout()
-        btn_ok = QPushButton("Create Project")
-        btn_cancel = QPushButton("Cancel")
+        btn_ok = QPushButton(tr(self.lang, "Create Project", "创建项目"))
+        btn_cancel = QPushButton(tr(self.lang, "Cancel", "取消"))
         btns.addStretch(1)
         btns.addWidget(btn_cancel)
         btns.addWidget(btn_ok)
@@ -549,13 +625,13 @@ class NewProjectDialog(QDialog):
         btn_ok.clicked.connect(self.on_ok)
 
     def choose_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Choose project folder")
+        folder = QFileDialog.getExistingDirectory(self, tr(self.lang, "Choose project folder", "选择项目文件夹"))
         if folder:
             self.folder_edit.setText(folder)
 
     def import_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Import decklist file", "",
+            self, tr(self.lang, "Import decklist file", "导入牌表文件"), "",
             "Text files (*.txt *.csv);;All files (*.*)"
         )
         if not path:
@@ -566,20 +642,138 @@ class NewProjectDialog(QDialog):
     def on_ok(self):
         folder = self.folder_edit.text().strip()
         if not folder:
-            QMessageBox.warning(self, "Missing folder", "Please choose a project folder.")
-            return
-        deck_text = self.text.toPlainText().strip()
-        if not deck_text:
-            QMessageBox.warning(self, "Missing decklist", "Please paste a decklist or import a file.")
+            QMessageBox.warning(self, tr(self.lang, "Missing folder", "缺少文件夹"), tr(self.lang, "Please choose a project folder.", "请选择项目文件夹。"))
             return
 
-        names = parse_decklist_text(deck_text)
-        if not names:
-            QMessageBox.warning(self, "Decklist", "Could not parse any card names.")
+        deck_text = self.text.toPlainText().strip()
+        token_text = self.token_box.toPlainText().strip()
+        if not deck_text and not token_text:
+            QMessageBox.warning(self, tr(self.lang, "Missing input", "缺少输入"), tr(self.lang, "Please paste a decklist and/or token queries.", "请粘贴牌表和/或衍生物查询。"))
             return
 
         self.project_folder = folder
         self.deck_text = deck_text
+        self.token_text = token_text
+        self.duplicate_mode = "different" if self.dd_dupes.currentIndex() == 1 else "same"
+        self.accept()
+
+
+class FilterSetupDialog(QDialog):
+    def __init__(self, filters: Dict[str, Any], ui_language: str = "en", allow_skip: bool = False, parent=None):
+        super().__init__(parent)
+        self.ui_language = ui_language if ui_language in ("en", "zh") else "en"
+        self.setModal(True)
+        self.resize(560, 420)
+
+        self.filters = dict(DEFAULT_FILTERS)
+        self.filters.update(filters or {})
+        self.use_current = False
+
+        layout = QVBoxLayout(self)
+
+        self.lang_box = QGroupBox()
+        self.lang_form = QFormLayout(self.lang_box)
+        self.dd_lang = QComboBox()
+        self.dd_lang.addItems(["English", "中文"])
+        self.dd_lang.setCurrentIndex(1 if self.ui_language == "zh" else 0)
+        self.lang_label = QLabel()
+        self.lang_form.addRow(self.lang_label, self.dd_lang)
+        layout.addWidget(self.lang_box)
+
+        self.filt_box = QGroupBox()
+        self.form = QFormLayout(self.filt_box)
+
+        self.cb_prefer_borderless = QCheckBox()
+
+        self.dd_border = QComboBox()
+        self.dd_border.addItems(["any", "borderless", "black", "white", "silver"])
+        self.dd_border.setCurrentText(str(self.filters.get("border", "any")).lower())
+
+        self.dd_frame = QComboBox()
+        self.dd_frame.addItems(["any", "1993", "1997", "2003", "2015", "future"])
+        self.dd_frame.setCurrentText(str(self.filters.get("frame_edition", "any")).lower())
+
+        self.cb_full = QCheckBox()
+        self.cb_full.setChecked(bool(self.filters.get("is_full", False)))
+        self.cb_hires = QCheckBox()
+        self.cb_hires.setChecked(bool(self.filters.get("is_hires", False)))
+
+        self.border_label = QLabel()
+        self.frame_label = QLabel()
+        self.form.addRow(self.border_label, self.dd_border)
+        self.form.addRow(self.frame_label, self.dd_frame)
+        self.form.addRow("", self.cb_prefer_borderless)
+        self.form.addRow("", self.cb_full)
+        self.form.addRow("", self.cb_hires)
+        layout.addWidget(self.filt_box)
+
+        self.advanced_hint = QLabel()
+        self.advanced_hint.setWordWrap(True)
+        self.advanced_hint.setStyleSheet("color:#666;")
+        layout.addWidget(self.advanced_hint)
+
+        btns = QHBoxLayout()
+        self.ok = QPushButton()
+        self.cancel = QPushButton()
+        btns.addStretch(1)
+        btns.addWidget(self.cancel)
+        self.use_current_btn: Optional[QPushButton] = None
+        if allow_skip:
+            self.use_current_btn = QPushButton()
+            self.use_current_btn.clicked.connect(self.on_use_current)
+            btns.addWidget(self.use_current_btn)
+        btns.addWidget(self.ok)
+        layout.addLayout(btns)
+
+        self.cancel.clicked.connect(self.reject)
+        self.ok.clicked.connect(self.on_ok)
+        self.dd_lang.currentIndexChanged.connect(self.on_lang_changed)
+        self.cb_prefer_borderless.setChecked(bool(self.filters.get("prefer_borderless", False)) and str(self.filters.get("border", "any")).lower() == "any")
+        self.dd_border.currentTextChanged.connect(self._update_borderless_enabled)
+        self._update_borderless_enabled()
+        self.refresh_texts()
+
+    def refresh_texts(self):
+        self.setWindowTitle(tr(self.ui_language, "Project Settings", "项目设置"))
+        self.lang_box.setTitle(tr(self.ui_language, "Language", "语言"))
+        self.lang_label.setText(tr(self.ui_language, "UI Language:", "界面语言："))
+        self.filt_box.setTitle(tr(self.ui_language, "Default Filters", "默认筛选"))
+        self.cb_prefer_borderless.setText(tr(self.ui_language, "Prefer borderless when border=Any", "当边框=任意时优先无边框"))
+        self.cb_full.setText(tr(self.ui_language, "Full art", "全图"))
+        self.cb_hires.setText(tr(self.ui_language, "Hi-res", "高清"))
+        self.border_label.setText(tr(self.ui_language, "Border", "边框"))
+        self.frame_label.setText(tr(self.ui_language, "Frame", "画框"))
+        self.advanced_hint.setText(tr(self.ui_language, "Advanced filters (frame effect/default/atypical/stamp/UB) can be changed later in the main window.", "高级筛选（画框效果/默认/非典型/印章/排除UB）可在主窗口继续调整。"))
+        self.ok.setText(tr(self.ui_language, "Continue", "继续"))
+        self.cancel.setText(tr(self.ui_language, "Cancel", "取消"))
+        if self.use_current_btn is not None:
+            self.use_current_btn.setText(tr(self.ui_language, "Use Current", "使用当前设置"))
+
+    def on_lang_changed(self, _idx: int):
+        self.ui_language = "zh" if self.dd_lang.currentIndex() == 1 else "en"
+        self.refresh_texts()
+
+    def _update_borderless_enabled(self):
+        enabled = self.dd_border.currentText().lower() == "any"
+        self.cb_prefer_borderless.setEnabled(enabled)
+        if not enabled:
+            self.cb_prefer_borderless.setChecked(False)
+
+    def on_use_current(self):
+        self.use_current = True
+        self.accept()
+
+    def on_ok(self):
+        self.ui_language = "zh" if self.dd_lang.currentIndex() == 1 else "en"
+        merged = dict(self.filters)
+        merged.update({
+            "prefer_borderless": bool(self.cb_prefer_borderless.isChecked()) and self.dd_border.currentText().lower() == "any",
+            "border": self.dd_border.currentText().lower(),
+            "frame_edition": self.dd_frame.currentText().lower(),
+            "is_full": bool(self.cb_full.isChecked()),
+            "is_hires": bool(self.cb_hires.isChecked()),
+        })
+        self.filters = merged
         self.accept()
 
 # ---------------------------- Thumbnail Widget ----------------------------
@@ -610,15 +804,16 @@ class ThumbLabel(QLabel):
 class MainWindow(QMainWindow):
     def __init__(self, project: Project, settings: QSettings):
         super().__init__()
-        self.setWindowTitle("MTG Art Picker")
-        self.resize(1280, 820)
-
         self.settings = settings
         self.project = project
+
+        self.setWindowTitle(self.t(f"MTG Art Picker v{__version__}", f"万智牌选图器 v{__version__}"))
+        self.resize(1280, 820)
 
         self.meta_by_key: Dict[Tuple[str, str], List[Printing]] = {}
         self._fetching_meta: set[Tuple[str, str]] = set()
         self._all_prints_override: set[str] = set()
+        self._auto_relaxed_cards: set[str] = set()
 
         self.undo_stack: List[Tuple[int, Dict[str, Any], Dict[str, int]]] = []
 
@@ -645,6 +840,9 @@ class MainWindow(QMainWindow):
         self._thumb_token: int = 0
 
         self._big_token: int = 0
+        self._image_inflight: set[Tuple[str, str, str, int]] = set()
+        self._prefetch_inflight: set[Tuple[str, str, str, int]] = set()
+        self._inflight_lock = threading.Lock()
 
         # Scroll throttle for lazy thumb loading
         self._thumb_scroll_timer = QTimer(self)
@@ -657,7 +855,10 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
 
         self.hotkey_bar = QLabel(
-            "↑ Prev card   ↓ Select+Next   ←/→ Printings   0 All prints (toggle)   U Undo   ⌫ Clear   D Download   ? Help   (Newest printings first)"
+            self.t(
+                "↑ Prev card   ↓ Select+Next   ←/→ Printings   0 All prints (toggle)   U Undo   ⌫ Clear   D Download   ? Help   (Newest printings first)",
+                "↑ 上一张  ↓ 选择并下一张  ←/→ 印刷版本  0 切换全部版本  U 撤销  ⌫ 清除  D 下载  ? 帮助（最新版本优先）"
+            )
         )
         self.hotkey_bar.setStyleSheet("background:#222; color:#ddd; padding:6px;")
         root.addWidget(self.hotkey_bar)
@@ -668,55 +869,72 @@ class MainWindow(QMainWindow):
         fb.setContentsMargins(6, 6, 6, 6)
         fb.setSpacing(10)
 
-        fb.addWidget(QLabel("Filters:"))
+        fb.addWidget(QLabel(self.t("Filters:", "筛选：")))
 
-        self.cb_prefer_borderless = QCheckBox("Prefer borderless (fallback)")
-        self.cb_prefer_borderless.setChecked(bool(self.project.filters.get("prefer_borderless", True)))
+        self.cb_prefer_borderless = QCheckBox(self.t("Prefer borderless (fallback)", "优先无边框（回退）"))
+        self.cb_prefer_borderless.setChecked(bool(self.project.filters.get("prefer_borderless", False)))
         fb.addWidget(self.cb_prefer_borderless)
 
-        fb.addWidget(QLabel("Border:"))
+        fb.addWidget(QLabel(self.t("Border:", "边框：")))
         self.dd_border = QComboBox()
-        self.dd_border.addItems(["Any", "Borderless", "Black", "White", "Silver"])
+        self.dd_border.addItem(self.t("Any", "任意"), "any")
+        self.dd_border.addItem(self.t("Borderless", "无边框"), "borderless")
+        self.dd_border.addItem(self.t("Black", "黑边"), "black")
+        self.dd_border.addItem(self.t("White", "白边"), "white")
+        self.dd_border.addItem(self.t("Silver", "银边"), "silver")
         fb.addWidget(self.dd_border)
 
-        fb.addWidget(QLabel("Frame:"))
+        fb.addWidget(QLabel(self.t("Frame:", "画框：")))
         self.dd_frame = QComboBox()
-        self.dd_frame.addItems(["Any", "1993", "1997", "2003", "2015", "Future"])
+        self.dd_frame.addItem(self.t("Any", "任意"), "any")
+        self.dd_frame.addItem("1993", "1993")
+        self.dd_frame.addItem("1997", "1997")
+        self.dd_frame.addItem("2003", "2003")
+        self.dd_frame.addItem("2015", "2015")
+        self.dd_frame.addItem(self.t("Future", "未来"), "future")
         fb.addWidget(self.dd_frame)
 
-        fb.addWidget(QLabel("Frame effect:"))
+        fb.addWidget(QLabel(self.t("Frame effect:", "画框效果：")))
         self.dd_frame_fx = QComboBox()
-        self.dd_frame_fx.addItems(["Any", "legendary", "colorshifted", "tombstone", "enchantment"])
+        self.dd_frame_fx.addItem(self.t("Any", "任意"), "any")
+        self.dd_frame_fx.addItem("legendary", "legendary")
+        self.dd_frame_fx.addItem("colorshifted", "colorshifted")
+        self.dd_frame_fx.addItem("tombstone", "tombstone")
+        self.dd_frame_fx.addItem("enchantment", "enchantment")
         fb.addWidget(self.dd_frame_fx)
 
-        self.cb_full = QCheckBox("Full art (is:full)")
+        self.cb_full = QCheckBox(self.t("Full art (is:full)", "全图 (is:full)"))
         self.cb_full.setChecked(bool(self.project.filters.get("is_full", False)))
         fb.addWidget(self.cb_full)
 
-        self.cb_hires = QCheckBox("Hi-res (is:hires)")
+        self.cb_hires = QCheckBox(self.t("Hi-res (is:hires)", "高清 (is:hires)"))
         self.cb_hires.setChecked(bool(self.project.filters.get("is_hires", False)))
         fb.addWidget(self.cb_hires)
 
-        self.cb_default = QCheckBox("Default (is:default)")
+        self.cb_default = QCheckBox(self.t("Default (is:default)", "默认 (is:default)"))
         self.cb_default.setChecked(bool(self.project.filters.get("is_default", False)))
         fb.addWidget(self.cb_default)
 
-        self.cb_atypical = QCheckBox("Atypical (is:atypical)")
+        self.cb_atypical = QCheckBox(self.t("Atypical (is:atypical)", "非典型 (is:atypical)"))
         self.cb_atypical.setChecked(bool(self.project.filters.get("is_atypical", False)))
         fb.addWidget(self.cb_atypical)
 
-        self.cb_ex_ub = QCheckBox("Exclude UB (not:universesbeyond)")
+        self.cb_ex_ub = QCheckBox(self.t("Exclude UB (not:universesbeyond)", "排除UB (not:universesbeyond)"))
         self.cb_ex_ub.setChecked(bool(self.project.filters.get("exclude_ub", False)))
         fb.addWidget(self.cb_ex_ub)
 
-        fb.addWidget(QLabel("Stamp:"))
+        fb.addWidget(QLabel(self.t("Stamp:", "印章：")))
         self.dd_stamp = QComboBox()
-        self.dd_stamp.addItems(["Any", "oval", "acorn", "triangle", "arena"])
+        self.dd_stamp.addItem(self.t("Any", "任意"), "any")
+        self.dd_stamp.addItem("oval", "oval")
+        self.dd_stamp.addItem("acorn", "acorn")
+        self.dd_stamp.addItem("triangle", "triangle")
+        self.dd_stamp.addItem("arena", "arena")
         fb.addWidget(self.dd_stamp)
 
         fb.addStretch(1)
 
-        self.filters_bar.setStyleSheet("background:#1b1b1b; color:#ddd; border:1px solid #2a2a2a;")
+        self.filters_bar.setStyleSheet("background:#f3f6fb; color:#222; border:1px solid #ccd5e1; border-radius:8px;")
         root.addWidget(self.filters_bar)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -731,8 +949,8 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.deck_list, 1)
 
         btn_row = QHBoxLayout()
-        self.btn_download = QPushButton("Download (D)")
-        self.btn_help = QPushButton("Help (?)")
+        self.btn_download = QPushButton(self.t("Download (D)", "下载 (D)"))
+        self.btn_help = QPushButton(self.t("Help (?)", "帮助 (?)"))
         btn_row.addWidget(self.btn_download)
         btn_row.addWidget(self.btn_help)
         left_layout.addLayout(btn_row)
@@ -751,7 +969,7 @@ class MainWindow(QMainWindow):
         self.card_info.setStyleSheet("color:#666;")
         main_layout.addWidget(self.card_info)
 
-        self.big_image = QLabel("Loading…")
+        self.big_image = QLabel(self.t("Loading…", "加载中…"))
         self.big_image.setAlignment(Qt.AlignCenter)
         self.big_image.setMinimumHeight(440)
         self.big_image.setStyleSheet("background:#0d0d0d; border:1px solid #333; color:#888;")
@@ -780,9 +998,21 @@ class MainWindow(QMainWindow):
             self.goto_index(self.project.current_index, force=True)
         else:
             self.update_progress()
-            self.card_title.setText("No deck loaded")
-            self.card_info.setText("Create a new project or continue an existing one.")
+            self.card_title.setText(self.t("No deck loaded", "未加载牌表"))
+            self.card_info.setText(self.t("Create a new project or continue an existing one.", "请创建新项目或继续已有项目。"))
             self.big_image.setText("")
+
+    # ---------------- i18n / query helpers ----------------
+
+    def t(self, en: str, zh: str) -> str:
+        return zh if getattr(self.project, "ui_language", "en") == "zh" else en
+
+    def query_for_card(self, card: str) -> str:
+        return self.project.card_query.get(card, card)
+
+    def is_exact_name(self, card: str) -> bool:
+        q = self.query_for_card(card)
+        return not q.lower().startswith("type:token")
 
     # ---------------- Filters helpers ----------------
 
@@ -799,26 +1029,12 @@ class MainWindow(QMainWindow):
 
     def _load_filters_into_ui(self):
         f = self.project.filters or dict(DEFAULT_FILTERS)
+        self._set_combo_by_data(self.dd_border, (f.get("border") or "any").lower())
+        self._set_combo_by_data(self.dd_frame, (f.get("frame_edition") or "any").lower())
+        self._set_combo_by_data(self.dd_frame_fx, (f.get("frame_effect") or "any").lower())
+        self._set_combo_by_data(self.dd_stamp, (f.get("stamp") or "any").lower())
 
-        border_map = {"any": "Any", "borderless": "Borderless", "black": "Black", "white": "White", "silver": "Silver"}
-        b = (f.get("border") or "any").lower()
-        self.dd_border.setCurrentText(border_map.get(b, "Any"))
-
-        fe = (f.get("frame_edition") or "any").lower()
-        if fe == "any":
-            self.dd_frame.setCurrentText("Any")
-        elif fe == "future":
-            self.dd_frame.setCurrentText("Future")
-        else:
-            self.dd_frame.setCurrentText(fe)
-
-        fx = (f.get("frame_effect") or "any").lower()
-        self.dd_frame_fx.setCurrentText("Any" if fx == "any" else fx)
-
-        st = (f.get("stamp") or "any").lower()
-        self.dd_stamp.setCurrentText("Any" if st == "any" else st)
-
-        self.cb_prefer_borderless.setChecked(bool(f.get("prefer_borderless", True)))
+        self.cb_prefer_borderless.setChecked(bool(f.get("prefer_borderless", False)))
         self.cb_full.setChecked(bool(f.get("is_full", False)))
         self.cb_hires.setChecked(bool(f.get("is_hires", False)))
         self.cb_default.setChecked(bool(f.get("is_default", False)))
@@ -828,20 +1044,17 @@ class MainWindow(QMainWindow):
         self._update_prefer_borderless_enabled()
 
     def _update_prefer_borderless_enabled(self):
-        self.cb_prefer_borderless.setEnabled(self.dd_border.currentText() == "Any")
+        self.cb_prefer_borderless.setEnabled((self.dd_border.currentData() or "any") == "any")
+
+    def _set_combo_by_data(self, combo: QComboBox, value: str):
+        idx = combo.findData(value)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
 
     def _read_filters_from_ui(self) -> Dict[str, Any]:
-        border_rev = {"Any": "any", "Borderless": "borderless", "Black": "black", "White": "white", "Silver": "silver"}
-        frame_text = self.dd_frame.currentText()
-        frame_edition = "any" if frame_text == "Any" else frame_text.lower()
-
-        fx_text = self.dd_frame_fx.currentText()
-        frame_effect = "any" if fx_text == "Any" else fx_text
-
-        stamp_text = self.dd_stamp.currentText()
-        stamp = "any" if stamp_text == "Any" else stamp_text
-
-        border = border_rev.get(self.dd_border.currentText(), "any")
+        frame_edition = (self.dd_frame.currentData() or "any")
+        frame_effect = (self.dd_frame_fx.currentData() or "any")
+        stamp = (self.dd_stamp.currentData() or "any")
+        border = (self.dd_border.currentData() or "any")
         prefer_borderless = bool(self.cb_prefer_borderless.isChecked()) and (border == "any")
 
         return {
@@ -923,10 +1136,13 @@ class MainWindow(QMainWindow):
             self.deck_list.setCurrentRow(max(0, min(self.project.current_index, len(self.project.deck) - 1)))
 
     def format_card_row(self, card: str) -> str:
+        qty = int(self.project.card_qty.get(card, 1))
+        has_copy_suffix = bool(re.search(r"\[\d+/\d+\]$", card))
+        qty_txt = f" x{qty}" if qty > 1 and not has_copy_suffix else ""
         sel = self.project.selections.get(card)
         if sel:
-            return f"✅ {card} [{sel.get('set','')} {sel.get('collector','')}]"
-        return f"⬜ {card}"
+            return f"✅ {card}{qty_txt} [{sel.get('set','')} {sel.get('collector','')}]"
+        return f"⬜ {card}{qty_txt}"
 
     def update_row_text(self, idx: int):
         if 0 <= idx < self.deck_list.count():
@@ -937,7 +1153,7 @@ class MainWindow(QMainWindow):
         total = len(self.project.deck)
         selected = len(self.project.selections)
         self.progress_label.setText(
-            f"Card {self.project.current_index + 1} / {total}    Selected {selected} / {total}"
+            self.t(f"Card {self.project.current_index + 1} / {total}    Selected {selected} / {total}", f"卡牌 {self.project.current_index + 1} / {total}    已选择 {selected} / {total}")
             if total else ""
         )
 
@@ -964,7 +1180,7 @@ class MainWindow(QMainWindow):
         self.deck_list.blockSignals(False)
 
         card = self.current_card()
-        title = card + ("  (ALL PRINTS)" if card in self._all_prints_override else "")
+        title = card + (self.t("  (ALL PRINTS)", "  （全部印刷）") if card in self._all_prints_override else "")
         self.card_title.setText(title)
 
         self._thumb_context = None
@@ -1003,20 +1219,33 @@ class MainWindow(QMainWindow):
         self._fetching_meta.add(key)
 
         filters_copy = self.effective_filters_for_card(card)
-        logging.debug(f"Fetching printings for card={card} sig={sig}")
+        query = self.query_for_card(card)
+        exact_name = self.is_exact_name(card)
+        logging.debug(f"Fetching printings for card={card} query={query} sig={sig}")
 
         def worker():
             try:
-                prints = fetch_all_printings(card, filters_copy)
-                self.project.set_cached_meta(card, sig, prints)
-                self.meta_signals.meta_ready.emit(card, prints, sig)
+                prints = fetch_all_printings(query, filters_copy, exact_name=exact_name)
+                auto_relaxed = False
+                emit_sig = sig
+                if filters_copy and len(prints) < 5 and card not in self._all_prints_override:
+                    fallback = fetch_all_printings(query, {}, exact_name=exact_name)
+                    if fallback:
+                        prints = fallback
+                        emit_sig = "ALL"
+                        auto_relaxed = True
+                self.project.set_cached_meta(card, emit_sig, prints)
+                self.meta_signals.meta_ready.emit(card, prints, emit_sig, auto_relaxed)
             except Exception as e:
                 self.meta_signals.error.emit(card, str(e), sig)
 
         _meta_executor.submit(worker)
 
-    def on_meta_ready(self, card: str, prints: list, sig: str):
+    def on_meta_ready(self, card: str, prints: list, sig: str, auto_relaxed: bool):
         logging.debug(f"Meta ready for card={card} sig={sig} count={len(prints)}")
+        if auto_relaxed:
+            self._all_prints_override.add(card)
+            self._auto_relaxed_cards.add(card)
         if sig != self.effective_sig_for_card(card):
             self._fetching_meta.discard((card, sig))
             return
@@ -1032,7 +1261,7 @@ class MainWindow(QMainWindow):
         if sig != self.effective_sig_for_card(card):
             return
         if self.project.deck and card == self.current_card():
-            self.big_image.setText(f"Metadata load failed:\n{msg}")
+            self.big_image.setText(self.t("Metadata load failed:\n", "元数据加载失败：\n") + msg)
 
     # ---------------- Images (SAFE) ----------------
 
@@ -1040,10 +1269,18 @@ class MainWindow(QMainWindow):
         if not url:
             return
 
+        cache_key_tuple = (kind, card, sig, idx)
         cached = self.project.get_cached_image_bytes(kind, card, sig, idx)
         if cached:
             self.img_signals.bytes_ready.emit(key, cached)
             return
+
+        with self._inflight_lock:
+            if self.project.get_cached_image_bytes(kind, card, sig, idx) is not None:
+                return
+            if cache_key_tuple in self._image_inflight or cache_key_tuple in self._prefetch_inflight:
+                return
+            self._image_inflight.add(cache_key_tuple)
 
         def job():
             try:
@@ -1053,6 +1290,9 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logging.error(f"Image fetch failed key={key}: {e}", exc_info=True)
                 self.img_signals.error.emit(key, str(e))
+            finally:
+                with self._inflight_lock:
+                    self._image_inflight.discard(cache_key_tuple)
 
         _image_executor.submit(job)
 
@@ -1060,8 +1300,16 @@ class MainWindow(QMainWindow):
         """Preload helper: fills disk cache only, no signals/UI work."""
         if not url:
             return
+        cache_key_tuple = (kind, card, sig, idx)
         if self.project.get_cached_image_bytes(kind, card, sig, idx) is not None:
             return
+
+        with self._inflight_lock:
+            if self.project.get_cached_image_bytes(kind, card, sig, idx) is not None:
+                return
+            if cache_key_tuple in self._prefetch_inflight or cache_key_tuple in self._image_inflight:
+                return
+            self._prefetch_inflight.add(cache_key_tuple)
 
         def job():
             try:
@@ -1069,6 +1317,9 @@ class MainWindow(QMainWindow):
                 self.project.set_cached_image_bytes(kind, card, sig, idx, data)
             except Exception:
                 pass
+            finally:
+                with self._inflight_lock:
+                    self._prefetch_inflight.discard(cache_key_tuple)
 
         _image_executor.submit(job)
 
@@ -1147,7 +1398,7 @@ class MainWindow(QMainWindow):
                 return
             if not isValid(self.big_image):
                 return
-            self.big_image.setText(f"Image load failed:\n{msg}")
+            self.big_image.setText(self.t("Image load failed:\n", "图像加载失败：\n") + msg)
             return
 
         if key.startswith("thumb::"):
@@ -1183,8 +1434,8 @@ class MainWindow(QMainWindow):
         sig = self.effective_sig_for_card(card)
         prints = self.meta_by_key.get((card, sig), [])
         if not prints:
-            self.card_info.setText("No printings found (with current filters). Try loosening filters.")
-            self.big_image.setText("No printings found.")
+            self.card_info.setText(self.t("No printings found (with current filters). Try loosening filters.", "未找到符合当前筛选的印刷版本。请放宽筛选条件。"))
+            self.big_image.setText(self.t("No printings found.", "未找到印刷版本。"))
             self.clear_thumbnails()
             return
 
@@ -1196,21 +1447,22 @@ class MainWindow(QMainWindow):
         sel_txt = ""
         missing_hint = ""
         if sel:
-            sel_txt = f" | Selected: {sel.get('set','')} #{sel.get('collector','')}"
+            sel_txt = self.t(" | Selected: ", " | 已选择：") + f"{sel.get('set','')} #{sel.get('collector','')}"
             sel_key = (sel.get("set"), str(sel.get("collector")))
             visible = any((pr.set_code, pr.collector_number) == sel_key for pr in prints)
             if not visible:
-                missing_hint = "  [!] Selected printing hidden by filters"
+                missing_hint = self.t("  [!] Selected printing hidden by filters", "  [!] 所选印刷版本被筛选隐藏")
 
-        mode_hint = " | Mode: ALL PRINTS" if card in self._all_prints_override else ""
+        mode_hint = self.t(" | Mode: ALL PRINTS", " | 模式：全部印刷") if card in self._all_prints_override else ""
+        relax_hint = self.t(" | Filter auto-ignored (<5 results)", " | 筛选自动忽略（结果<5）") if card in self._auto_relaxed_cards else ""
         self.card_info.setText(
-            f"{p.set_name} | {p.set_code} #{p.collector_number} | Released {p.released_at} | "
-            f"Printing {aidx+1}/{len(prints)}{sel_txt}{missing_hint}{mode_hint}"
+            f"{p.set_name} | {p.set_code} #{p.collector_number} | {self.t('Released', '发行')} {p.released_at} | "
+            f"{self.t('Printing', '印刷')} {aidx+1}/{len(prints)}{sel_txt}{missing_hint}{mode_hint}{relax_hint}"
         )
 
         # big preview token bump
         self._big_token += 1
-        self.big_image.setText("Loading preview…")
+        self.big_image.setText(self.t("Loading preview…", "加载预览中…"))
         self.big_image.setPixmap(QPixmap())
         self.load_image_bytes_cached("normal", card, sig, aidx, p.image_normal, f"big::{card}::{sig}::{self._big_token}::{aidx}")
 
@@ -1365,12 +1617,13 @@ class MainWindow(QMainWindow):
 
         if card in self._all_prints_override:
             self._all_prints_override.remove(card)
+            self._auto_relaxed_cards.discard(card)
         else:
             self._all_prints_override.add(card)
 
         self._thumb_context = None
 
-        title = card + ("  (ALL PRINTS)" if card in self._all_prints_override else "")
+        title = card + (self.t("  (ALL PRINTS)", "  （全部印刷）") if card in self._all_prints_override else "")
         self.card_title.setText(title)
 
         self.ensure_meta(card)
@@ -1444,20 +1697,21 @@ class MainWindow(QMainWindow):
 
     def show_help(self):
         QMessageBox.information(
-            self, "Hotkeys",
+            self, self.t("Hotkeys", "快捷键"),
             "\n".join([
-                "↑ / ↓    Prev / Next card (↓ overwrites selection + advances)",
-                "← / →    Prev / Next printing",
-                "0        Toggle ALL prints for THIS card only (does not change global filters)",
-                "U        Undo last selection change",
-                "Backspace Clear selection",
-                "D        Download (warns if not all selected; downloads selected only)",
-                "G        Go to card number",
-                "O        Open in browser",
-                "?        Help",
+                self.t("↑ / ↓    Prev / Next card (↓ overwrites selection + advances)", "↑ / ↓    上一张 / 下一张（↓会覆盖并前进）"),
+                self.t("← / →    Prev / Next printing", "← / →    上一个 / 下一个印刷版本"),
+                self.t("0        Toggle ALL prints for THIS card only (does not change global filters)", "0        仅切换当前卡牌的全部印刷（不改全局筛选）"),
+                self.t("U        Undo last selection change", "U        撤销上一次选择"),
+                self.t("Backspace Clear selection", "Backspace 清除选择"),
+                self.t("D        Download (warns if not all selected; downloads selected only)", "D        下载（未全选会提示；仅下载已选）"),
+                self.t("G        Go to card number", "G        跳转到卡牌编号"),
+                self.t("O        Open in browser", "O        在浏览器打开"),
+                self.t("?        Help", "?        帮助"),
                 "",
-                "Tip: Printings are displayed newest-first (released desc).",
-                "Tip: Filters are saved per project and affect the printing list.",
+                self.t("Tip: Printings are displayed newest-first (released desc).", "提示：印刷版本按最新优先显示（发行日期降序）。"),
+                self.t("Tip: Filters are saved per project and affect the printing list.", "提示：筛选会按项目保存，并影响印刷列表。"),
+                self.t("Tip: Downloads always go to <project>/DOWNLOADED IMAGES HERE.", "提示：下载文件固定保存到 <项目>/DOWNLOADED IMAGES HERE。"),
             ])
         )
 
@@ -1465,7 +1719,7 @@ class MainWindow(QMainWindow):
         if not self.project.deck:
             return
         n, ok = QInputDialog.getInt(
-            self, "Go to card", "Card number:",
+            self, self.t("Go to card", "跳转卡牌"), self.t("Card number:", "卡牌编号："),
             self.project.current_index + 1, 1, len(self.project.deck), 1
         )
         if ok:
@@ -1516,7 +1770,7 @@ class MainWindow(QMainWindow):
 
     def download_prompt(self):
         if self._downloading:
-            QMessageBox.information(self, "Download", "A download is already in progress.")
+            QMessageBox.information(self, self.t("Download", "下载"), self.t("A download is already in progress.", "已有下载任务正在进行。"))
             return
 
         total = len(self.project.deck)
@@ -1527,23 +1781,20 @@ class MainWindow(QMainWindow):
         if selected != total:
             missing = total - selected
             resp = QMessageBox.question(
-                self, "Not fully selected",
-                f"You selected {selected} / {total} cards.\n"
-                f"{missing} cards have no selection.\n\n"
-                "Download selected cards and ignore the rest?",
+                self, self.t("Not fully selected", "未完全选择"),
+                self.t(f"You selected {selected} / {total} cards.\n{missing} cards have no selection.\n\nDownload selected cards and ignore the rest?", f"你已选择 {selected} / {total} 张卡。\n还有 {missing} 张未选择。\n\n是否仅下载已选择的卡牌并忽略其余？"),
                 QMessageBox.Yes | QMessageBox.Cancel,
                 QMessageBox.Cancel
             )
             if resp != QMessageBox.Yes:
                 return
 
-        out_dir = QFileDialog.getExistingDirectory(self, "Choose download folder")
-        if not out_dir:
-            return
+        out_dir = self.project.folder / "DOWNLOADED IMAGES HERE"
+        logging.info(f"Download destination: {out_dir}")
 
         items = list(self.project.selections.items())
         if not items:
-            QMessageBox.information(self, "Download", "No selected cards to download.")
+            QMessageBox.information(self, self.t("Download", "下载"), self.t("No selected cards to download.", "没有可下载的已选卡牌。"))
             return
 
         logging.info("Download started.")
@@ -1551,7 +1802,7 @@ class MainWindow(QMainWindow):
         self.btn_download.setEnabled(False)
         self._download_cancel.clear()
 
-        prog = QProgressDialog("Downloading selected cards…", "Cancel", 0, len(items), self)
+        prog = QProgressDialog(self.t(f"Downloading selected cards to:\n{out_dir}", f"正在下载到：\n{out_dir}"), self.t("Cancel", "取消"), 0, len(items), self)
         prog.setWindowModality(Qt.WindowModal)
         prog.canceled.connect(lambda: self._download_cancel.set())
         prog.show()
@@ -1574,26 +1825,46 @@ class MainWindow(QMainWindow):
                         continue
 
                     ext = ".png" if sel.get("png_url") else ".jpg"
-                    fname = safe_filename(f"{card} [{sel.get('set','')} {sel.get('collector','')}]") + ext
-                    dest = outp / fname
-                    if dest.exists():
-                        self.dl_signals.progress.emit(i)
-                        continue
+                    qty = int(self.project.card_qty.get(card, 1))
+                    for copy_idx in range(1, qty + 1):
+                        suffix = f" ({copy_idx})" if qty > 1 else ""
+                        fname = safe_filename(f"{card}{suffix} [{sel.get('set','')} {sel.get('collector','')}]") + ext
+                        dest = outp / fname
+                        if dest.exists():
+                            continue
 
-                    r = sess.get(url, stream=True, timeout=90)
-                    r.raise_for_status()
-                    with open(dest, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=1024 * 256):
-                            if chunk:
-                                f.write(chunk)
+                        last_err: Optional[Exception] = None
+                        for attempt in range(3):
+                            try:
+                                r = sess.get(url, stream=True, timeout=90)
+                                r.raise_for_status()
+                                with open(dest, "wb") as f:
+                                    for chunk in r.iter_content(chunk_size=1024 * 256):
+                                        if chunk:
+                                            f.write(chunk)
+                                last_err = None
+                                break
+                            except Exception as e:
+                                last_err = e
+                                if dest.exists():
+                                    try:
+                                        dest.unlink()
+                                    except Exception:
+                                        pass
+                                for _ in range(int((0.4 * (attempt + 1)) / 0.1)):
+                                    if self._download_cancel.is_set():
+                                        raise RuntimeError("Download cancelled")
+                                    time.sleep(0.1)
+                        if last_err is not None:
+                            raise last_err
 
                     self.dl_signals.progress.emit(i)
 
-                self.dl_signals.done.emit("Download finished.")
+                self.dl_signals.done.emit(self.t(f"Download finished. Files saved to:\n{outp}", f"下载完成。文件已保存到：\n{outp}"))
             except Exception as e:
                 self.dl_signals.error.emit(str(e))
 
-        _preload_executor.submit(worker)  # bounded worker, avoids extra threads
+        _download_executor.submit(worker)
 
     def on_download_progress(self, value: int):
         if self._progress_dialog:
@@ -1607,7 +1878,7 @@ class MainWindow(QMainWindow):
         self.btn_download.setEnabled(True)
         logging.info("Download finished.")
         if not self._download_cancel.is_set():
-            QMessageBox.information(self, "Download", msg)
+            QMessageBox.information(self, self.t("Download", "下载"), msg)
 
     def on_download_error(self, msg: str):
         if self._progress_dialog:
@@ -1616,7 +1887,7 @@ class MainWindow(QMainWindow):
         self._downloading = False
         self.btn_download.setEnabled(True)
         logging.error(f"Download failed: {msg}")
-        QMessageBox.critical(self, "Download failed", msg)
+        QMessageBox.critical(self, self.t("Download failed", "下载失败"), msg)
 
 # ---------------------------- App Bootstrap ----------------------------
 
@@ -1631,31 +1902,59 @@ def update_recent_projects(settings: QSettings, folder: str):
 def main():
     app = QApplication([])
     settings = QSettings("LocalTools", "MTGArtPicker")
+    ui_language = str(settings.value("ui_language", "en"))
 
     recent = settings.value("recent_projects", [])
     if not isinstance(recent, list):
         recent = []
 
-    start = StartDialog(recent=recent)
+    start = StartDialog(recent=recent, ui_language=ui_language)
     if start.exec() != QDialog.Accepted or not start.choice:
         return
+    ui_language = start.ui_language
+    settings.setValue("ui_language", ui_language)
 
     mode, path = start.choice
 
     if mode == "new":
-        dlg = NewProjectDialog()
+        dlg = NewProjectDialog(ui_language=ui_language)
         if dlg.exec() != QDialog.Accepted or not dlg.project_folder:
             return
-        proj_folder = dlg.project_folder
-        deck_text = dlg.deck_text
+        pr = Project(Path(dlg.project_folder))
 
-        pr = Project(Path(proj_folder))
-        pr.deck = parse_decklist_text(deck_text)
+        deck_entries: List[str] = []
+        card_query: Dict[str, str] = {}
+        card_qty: Dict[str, int] = {}
+
+        for qty, name in parse_deck_quantities(dlg.deck_text):
+            if dlg.duplicate_mode == "different":
+                for i in range(1, qty + 1):
+                    key = f"{name} [{i}/{qty}]" if qty > 1 else name
+                    deck_entries.append(key)
+                    card_query[key] = name
+                    card_qty[key] = 1
+            else:
+                deck_entries.append(name)
+                card_query[name] = name
+                card_qty[name] = card_qty.get(name, 0) + qty
+
+        for i, token_q in enumerate(parse_token_queries(dlg.token_text), start=1):
+            key = f"Token Query {i}: {token_q}"
+            deck_entries.append(key)
+            card_query[key] = token_q
+            card_qty[key] = 1
+
+        if not deck_entries:
+            QMessageBox.warning(None, tr(ui_language, "Decklist", "牌表"), tr(ui_language, "Could not parse any card names or token queries.", "无法解析任何卡名或衍生物查询。"))
+            return
+
+        pr.deck = deck_entries
+        pr.card_query = card_query
+        pr.card_qty = card_qty
         pr.current_index = 0
         pr.active_printing_index = {}
         pr.selections = {}
         pr.filters = dict(DEFAULT_FILTERS)
-        pr.save()
 
     elif mode in ("continue", "browse"):
         if not path:
@@ -1663,10 +1962,19 @@ def main():
         pr = Project(Path(path))
         pr.load()
         if not pr.deck:
-            QMessageBox.warning(None, "Project", "This project has no deck. Create a new project instead.")
+            QMessageBox.warning(None, tr(ui_language, "Project", "项目"), tr(ui_language, "This project has no deck. Create a new project instead.", "该项目没有牌表。请改为创建新项目。"))
             return
     else:
         return
+
+    pre = FilterSetupDialog(pr.filters, ui_language, allow_skip=(mode in ("continue", "browse")))
+    if pre.exec() != QDialog.Accepted:
+        return
+    if not pre.use_current:
+        pr.filters = pre.filters
+        pr.ui_language = pre.ui_language
+    settings.setValue("ui_language", pr.ui_language)
+    pr.save()
 
     update_recent_projects(settings, str(pr.folder))
 
@@ -1679,10 +1987,17 @@ def main():
     try:
         app.exec()
     finally:
-        # bounded pools shutdown
-        for ex in (_image_executor, _meta_executor, _preload_executor):
+        if 'w' in locals():
             try:
-                ex.shutdown(wait=False, cancel_futures=False)
+                with w._inflight_lock:
+                    w._image_inflight.clear()
+                    w._prefetch_inflight.clear()
+            except Exception:
+                pass
+        # bounded pools shutdown
+        for ex in (_image_executor, _meta_executor, _preload_executor, _download_executor):
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 pass
 
