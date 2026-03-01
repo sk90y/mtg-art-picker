@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "2.0.3"
+__version__ = "2.0.4"
 
 import json
 import re
@@ -187,8 +187,19 @@ def parse_token_queries(text: str) -> List[str]:
         line = raw.strip()
         if not line or line.startswith("#") or line.startswith("//"):
             continue
-        if "type:token" not in line.lower():
-            line = f"type:token {line}"
+        ll = line.lower()
+
+        # Convenience syntax: "Human 1/1" -> "Human pow=1 tou=1"
+        if "pow=" not in ll and "tou=" not in ll:
+            m = re.search(r"\b(\d+)\s*/\s*(\d+)\b", line)
+            if m:
+                p, t = m.group(1), m.group(2)
+                base = (line[:m.start()] + " " + line[m.end():]).strip()
+                line = f"{base} pow={p} tou={t}".strip()
+                ll = line.lower()
+
+        if "type:token" not in ll:
+            line = f"type:token {line}".strip()
         tokens.append(line)
     return tokens
 
@@ -521,7 +532,7 @@ class StartDialog(QDialog):
 
     def retranslate_ui(self):
         self.setWindowTitle(tr(self.lang, "MTG Art Picker — Start", "万智牌选图器 — 开始"))
-        self.lang_label.setText(tr(self.lang, "Language:", "语言："))
+        self.lang_label.setText(tr(self.lang, "语言：", "Language:"))
         self.title.setText(tr(self.lang, "Choose an option:", "请选择一个选项："))
         self.btn_new.setText(tr(self.lang, "New Project", "新建项目"))
         self.btn_continue.setText(tr(self.lang, "Continue Project", "继续项目"))
@@ -607,6 +618,17 @@ class NewProjectDialog(QDialog):
         self.token_box.setPlaceholderText(tr(self.lang, "Examples: cat pow=2 tou=2 OR type:token treasure", "示例：cat pow=2 tou=2 或 type:token treasure"))
         self.token_box.setFixedHeight(120)
         layout.addWidget(self.token_box)
+
+        token_help = QLabel(tr(
+            self.lang,
+            "Guide: \"Human 1/1\" → \"Human pow=1 tou=1\"; \"treasure\" → \"treasure\"; \"cat 2/2\" → \"cat pow=2 tou=2\"."
+            " The app auto-adds \"type:token\" when missing.",
+            "指南：\"Human 1/1\" → \"Human pow=1 tou=1\"；\"treasure\" → \"treasure\"；\"cat 2/2\" → \"cat pow=2 tou=2\"。"
+            " 若未填写，程序会自动补上 \"type:token\"。"
+        ))
+        token_help.setWordWrap(True)
+        token_help.setStyleSheet("color:#666;")
+        layout.addWidget(token_help)
 
         btns = QHBoxLayout()
         btn_ok = QPushButton(tr(self.lang, "Create Project", "创建项目"))
@@ -776,11 +798,11 @@ class ThumbLabel(QLabel):
 class MainWindow(QMainWindow):
     def __init__(self, project: Project, settings: QSettings):
         super().__init__()
+        self.project = project
         self.setWindowTitle(self.t("MTG Art Picker", "万智牌选图器"))
         self.resize(1280, 820)
 
         self.settings = settings
-        self.project = project
 
         self.meta_by_key: Dict[Tuple[str, str], List[Printing]] = {}
         self._fetching_meta: set[Tuple[str, str]] = set()
