@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "2.0.1"
+__version__ = "2.0.3"
 
 import json
 import re
@@ -466,27 +466,40 @@ class StartDialog(QDialog):
     def __init__(self, parent=None, recent: List[str] = None, ui_language: str = "en"):
         super().__init__(parent)
         self.lang = ui_language if ui_language in ("en", "zh") else "en"
-        self.setWindowTitle(tr(self.lang, "MTG Art Picker — Start", "万智牌选图器 — 开始"))
+        self.initial_lang = self.lang
+        self.lang_explicitly_changed = False
         self.setModal(True)
         self.resize(520, 320)
 
         self.choice: Optional[Tuple[str, Optional[str]]] = None
 
         layout = QVBoxLayout(self)
-        title = QLabel(tr(self.lang, "Choose an option:", "请选择一个选项："))
-        title.setFont(QFont("Arial", 12, QFont.Bold))
-        layout.addWidget(title)
+
+        lang_row = QHBoxLayout()
+        self.lang_label = QLabel()
+        self.dd_lang = QComboBox()
+        self.dd_lang.addItems(["English", "中文"])
+        self.dd_lang.setCurrentIndex(1 if self.lang == "zh" else 0)
+        lang_row.addWidget(self.lang_label)
+        lang_row.addWidget(self.dd_lang)
+        lang_row.addStretch(1)
+        layout.addLayout(lang_row)
+
+        self.title = QLabel()
+        self.title.setFont(QFont("Arial", 12, QFont.Bold))
+        layout.addWidget(self.title)
 
         row = QHBoxLayout()
-        self.btn_new = QPushButton(tr(self.lang, "New Project", "新建项目"))
-        self.btn_continue = QPushButton(tr(self.lang, "Continue Project", "继续项目"))
-        self.btn_browse = QPushButton(tr(self.lang, "Browse…", "浏览…"))
+        self.btn_new = QPushButton()
+        self.btn_continue = QPushButton()
+        self.btn_browse = QPushButton()
         row.addWidget(self.btn_new)
         row.addWidget(self.btn_continue)
         row.addWidget(self.btn_browse)
         layout.addLayout(row)
 
-        layout.addWidget(QLabel(tr(self.lang, "Recent projects:", "最近项目：")))
+        self.recent_label = QLabel()
+        layout.addWidget(self.recent_label)
         self.recent_list = QListWidget()
         layout.addWidget(self.recent_list)
 
@@ -494,14 +507,32 @@ class StartDialog(QDialog):
             for p in recent[:12]:
                 self.recent_list.addItem(QListWidgetItem(p))
 
-        hint = QLabel(tr(self.lang, "Tip: Project folder stores selections + cache so you can resume anytime.", "提示：项目文件夹会保存选择结果和缓存，可随时继续。"))
-        hint.setStyleSheet("color:#666;")
-        layout.addWidget(hint)
+        self.hint = QLabel()
+        self.hint.setStyleSheet("color:#666;")
+        layout.addWidget(self.hint)
 
         self.btn_new.clicked.connect(self.on_new)
         self.btn_continue.clicked.connect(self.on_continue)
         self.btn_browse.clicked.connect(self.on_browse)
         self.recent_list.itemDoubleClicked.connect(self.on_recent_double)
+        self.dd_lang.currentIndexChanged.connect(self.on_language_changed)
+
+        self.retranslate_ui()
+
+    def retranslate_ui(self):
+        self.setWindowTitle(tr(self.lang, "MTG Art Picker — Start", "万智牌选图器 — 开始"))
+        self.lang_label.setText(tr(self.lang, "Language:", "语言："))
+        self.title.setText(tr(self.lang, "Choose an option:", "请选择一个选项："))
+        self.btn_new.setText(tr(self.lang, "New Project", "新建项目"))
+        self.btn_continue.setText(tr(self.lang, "Continue Project", "继续项目"))
+        self.btn_browse.setText(tr(self.lang, "Browse…", "浏览…"))
+        self.recent_label.setText(tr(self.lang, "Recent projects:", "最近项目："))
+        self.hint.setText(tr(self.lang, "Tip: Project folder stores selections + cache so you can resume anytime.", "提示：项目文件夹会保存选择结果和缓存，可随时继续。"))
+
+    def on_language_changed(self):
+        self.lang = "zh" if self.dd_lang.currentIndex() == 1 else "en"
+        self.lang_explicitly_changed = (self.lang != self.initial_lang)
+        self.retranslate_ui()
 
     def on_new(self):
         self.choice = ("new", None)
@@ -1810,6 +1841,8 @@ def main():
     if start.exec() != QDialog.Accepted or not start.choice:
         return
 
+    ui_language = start.lang
+
     mode, path = start.choice
 
     if mode == "new":
@@ -1817,6 +1850,7 @@ def main():
         if dlg.exec() != QDialog.Accepted or not dlg.project_folder:
             return
         pr = Project(Path(dlg.project_folder))
+        pr.ui_language = ui_language
 
         deck_entries: List[str] = []
         card_query: Dict[str, str] = {}
@@ -1857,6 +1891,8 @@ def main():
             return
         pr = Project(Path(path))
         pr.load()
+        if start.lang_explicitly_changed:
+            pr.ui_language = ui_language
         if not pr.deck:
             QMessageBox.warning(None, tr(ui_language, "Project", "项目"), tr(ui_language, "This project has no deck. Create a new project instead.", "该项目没有牌表。请改为创建新项目。"))
             return
