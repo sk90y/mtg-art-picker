@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
 
 import json
 import re
@@ -97,6 +97,7 @@ def setup_project_logging(project_folder: Path) -> Path:
     root.addHandler(ch)
 
     logging.info("========== MTG ART PICKER START ==========")
+    logging.info(f"Version: {__version__}")
     logging.info(f"Project folder: {project_folder}")
     logging.info(f"Log file: {log_path}")
 
