@@ -16,6 +16,20 @@ Built with PySide6 and powered by Scryfall.
 - 💾 Local cache – works offline after first load
 - 📥 Batch download selected images (PNG/JPG)
 - ↔️ Compare all versions side‑by‑side
+- 🌐 English/中文 UI language support
+- 🧩 Token query helper (supports shorthand like `Human 1/1`)
+
+## What’s New in v2.0.4
+- ✅ Fixed startup crash (`MainWindow` initialization order issue)
+- ✅ Added token query guide under the token input box
+- ✅ Token shorthand normalization:
+  - `Human 1/1` → `type:token Human pow=1 tou=1`
+  - `cat 2/2` → `type:token cat pow=2 tou=2`
+  - `treasure` → `type:token treasure`
+- ✅ Added language selector on the first screen
+- ✅ First-screen language label now intentionally flips to make switching easier:
+  - English UI: `语言：English`
+  - Chinese UI: `Language: 中文`
 
 Perfect for:
 
@@ -45,14 +59,17 @@ So I made MTG Art Picker: **fast navigation, minimal clicks, all in one place.**
 
 Click here:
 
-👉 [https://github.com/YOURNAME/mtg-art-picker/releases](https://github.com/sk90y/mtg-art-picker/releases)
+👉 Releases page: [https://github.com/sk90y/mtg-art-picker/releases](https://github.com/sk90y/mtg-art-picker/releases)
+
+👉 Direct download (v2.0.4):
+`https://github.com/sk90y/mtg-art-picker/releases/download/v2.0.4/art.picker.2.0.4.zip`
 
 Then:
 
-1. Download **MTG_Art_Picker_Windows.zip**
+1. Download **art.picker.2.0.4.zip**
 2. Right-click → **Extract All**
 3. Open the folder
-4. Double-click **CLICK_THIS_TO_RUN.bat**
+4. Double-click **CLICK THIS TO RUN.bat**
 
 ✅ No installation required  
 ✅ Works on Windows 10 / 11  
@@ -103,7 +120,7 @@ Magic: The Gathering players who want:
 
 ### 1. Starting a Project
 
-- **New Project** – Choose a folder to store your project (selections and cache). Paste a decklist (one card per line, quantities like `2x Arcane Signet` are fine).  
+- **New Project** – Choose a folder to store your project (selections and cache). Paste a decklist (one card per line, quantities like `2x Arcane Signet` are fine). You can also paste **token queries** in the token box (for example: `Human 1/1`, `treasure`, `cat 2/2`). The app converts shorthand and auto-adds `type:token` when needed.  
   **Important:** If you are copying from **Moxfield**, use **“Copy as Plain Text”** (or similar) to get just the card names. The tool is not designed to read Moxfield’s formatted output that includes set codes and collector numbers – the app will generate the print numbers based on **your** choices later.
 - **Continue Project** – Pick a recent project to resume where you left off.
 - **Browse…** – Open any existing project folder.
