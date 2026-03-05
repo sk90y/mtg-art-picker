@@ -123,6 +123,13 @@ Magic: The Gathering players who want:
 
 - **New Project** – Choose a folder to store your project (selections and cache). Paste a decklist (one card per line, quantities like `2x Arcane Signet` are fine). You can also paste **token queries** in the token box (for example: `Human 1/1`, `treasure`, `cat 2/2`). The app converts shorthand and auto-adds `type:token` when needed.  
   **Important:** If you are copying from **Moxfield**, use **“Copy as Plain Text”** (or similar) to get just the card names. The tool is not designed to read Moxfield’s formatted output that includes set codes and collector numbers – the app will generate the print numbers based on **your** choices later.
+
+  **Moxfield click path (recommended):**
+  1. Click the **three dots** (`More`) in your deck page.
+  2. Click **Export**.
+  3. Click **Copy Plain Text**.
+
+  ⚠️ Do **not** use export formats that include set code + collector number (for example, `Abyssal Gatekeeper (WTH) 59`). Those lines can fail exact-name lookup.
 - **Continue Project** – Pick a recent project to resume where you left off.
 - **Browse…** – Open any existing project folder.
 
