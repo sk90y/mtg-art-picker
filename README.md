@@ -127,6 +127,7 @@ Magic: The Gathering players who want:
   **Moxfield click path (recommended):**
   1. Click the **three dots** (`More`) in your deck page.
   2. Click **Export**.
+  <img width="439" height="305" alt="image" src="https://github.com/user-attachments/assets/a03af662-a8b8-4d6c-acfa-fdc563b35a18" />
   3. Click **Copy Plain Text**.
 
   ⚠️ Do **not** use export formats that include set code + collector number (for example, `Abyssal Gatekeeper (WTH) 59`). Those lines can fail exact-name lookup.
